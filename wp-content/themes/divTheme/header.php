@@ -44,7 +44,7 @@ if($pageID == 16){
             </nav>
             <div class="header__right">
                 <div class="header__btn">
-                    <a href="/catalog">В каталог</a>
+                    <a href="/cart">Корзина (<span class="cart-count"><?= WC()->cart->get_cart_contents_count(); ?></span>)</a>
                 </div>
                 <div class="header__btn-menu">
                     <span></span>

@@ -4,7 +4,9 @@ add_action( 'wp_enqueue_scripts', 'theme_name_scripts' );
 function theme_name_scripts() {
     wp_enqueue_style( 'style', get_stylesheet_uri() );
     wp_enqueue_script( 'js', get_template_directory_uri() . '/assets/js/main.js', array(), '1.0.0', true );
-    wp_localize_script('js', 'ajaxData', [
+    wp_enqueue_script( 'cart', get_template_directory_uri() . '/assets/js/cart.js', array(), '1.0.0', true );
+    wp_enqueue_script( 'order', get_template_directory_uri() . '/assets/js/order.js', array(), '1.0.0', true );
+    wp_localize_script('cart', 'ajaxData', [
         'ajaxurl' => admin_url('admin-ajax.php')
     ]);
 }
@@ -35,21 +37,30 @@ function product_add_to_cart() {
     $quantity = isset($_POST['quantity']) ? absint($_POST['quantity']) : 1;
 
     $cart = WC()->cart;
-
     $cart_item_key = $cart->add_to_cart($product_id, $quantity);
 
     if ($cart_item_key) {
-        $cart_contents = $cart->get_cart();
-        $cart_quantity = $cart_contents[$cart_item_key]['quantity'];
+        WC()->cart->calculate_totals();
+
+        $cart_quantity = 0;
+        foreach (WC()->cart->get_cart() as $item) {
+            if ($item['product_id'] == $product_id) {
+                $cart_quantity += $item['quantity'];
+            }
+        }
+
+        $total_quantity = WC()->cart->get_cart_contents_count();
 
         wp_send_json_success([
             'cart_quantity' => $cart_quantity,
-            'product_id' => $product_id
+            'product_id' => $product_id,
+            'total_quantity' => $total_quantity,
         ]);
     } else {
         wp_send_json_error(['message' => 'Could not add product']);
     }
 }
+
 
 add_action('wp_ajax_update_product_quantity', 'custom_ajax_update_quantity');
 add_action('wp_ajax_nopriv_update_product_quantity', 'custom_ajax_update_quantity');
@@ -67,7 +78,12 @@ function custom_ajax_update_quantity() {
         if ($cart_item['product_id'] == $product_id) {
             if ($new_quantity > 0) {
                 WC()->cart->set_quantity($cart_item_key, $new_quantity);
-                wp_send_json_success(['message' => 'Quantity updated', 'new_quantity' => $new_quantity]);
+                $total_quantity = WC()->cart->get_cart_contents_count();
+                wp_send_json_success([
+                    'message' => 'Quantity updated',
+                    'new_quantity' => $new_quantity,
+                    'total_quantity' => $total_quantity,
+                ]);
             } else {
                 WC()->cart->remove_cart_item($cart_item_key);
                 wp_send_json_success(['message' => 'Product removed']);
@@ -106,10 +122,78 @@ function custom_ajax_update_cart_quantity() {
         $cart->remove_cart_item($cart_item_key);
     }
 
+    $total_quantity = WC()->cart->get_cart_contents_count();
+    $total_price = WC()->cart->get_cart_contents_total();
+
+
     wp_send_json_success([
         'message' => 'Количество обновлено',
-        'new_total_price' => wc_price($cart->get_cart_contents_total()),
+        'total_price' => $total_price,
         'cart_item_key' => $cart_item_key,
-        'new_quantity' => $new_quantity
+        'new_quantity' => $new_quantity,
+        'total_qty' => $total_quantity,
+    ]);
+}
+
+
+add_action('wp_ajax_process_checkout', 'process_checkout');
+add_action('wp_ajax_nopriv_process_checkout', 'process_checkout');
+
+function process_checkout() {
+    parse_str($_POST['form_data'], $form_data);
+
+    if (empty($form_data['billing_first_name']) || empty($form_data['billing_last_name']) || empty($form_data['billing_email']) || empty($form_data['billing_phone']) || empty($form_data['billing_address_1'])) {
+        wp_send_json_error(['message' => 'Заполните все поля']);
+        return;
+    }
+
+    $order = wc_create_order();
+    $order->set_address([
+        'first_name' => sanitize_text_field($form_data['billing_first_name']),
+        'last_name'  => sanitize_text_field($form_data['billing_last_name']),
+        'email'      => sanitize_email($form_data['billing_email']),
+        'phone'      => sanitize_text_field($form_data['billing_phone']),
+        'address_1'  => sanitize_text_field($form_data['billing_address_1']),
+    ], 'billing');
+
+    foreach (WC()->cart->get_cart() as $cart_item_key => $cart_item) {
+        $order->add_product(wc_get_product($cart_item['product_id']), $cart_item['quantity']);
+    }
+
+    $order->calculate_totals();
+    $order->update_status('processing', 'Заказ создан через AJAX');
+    $order_id = $order->get_id();
+
+    WC()->cart->empty_cart();
+
+    wp_send_json_success(['order_id' => $order_id]);
+}
+
+add_action('wp_ajax_apply_coupon', 'apply_coupon');
+add_action('wp_ajax_nopriv_apply_coupon', 'apply_coupon');
+
+function apply_coupon() {
+    if (!isset($_POST['coupon_code'])) {
+        wp_send_json_error(['message' => 'Не указан промокод']);
+        return;
+    }
+
+    $coupon_code = sanitize_text_field($_POST['coupon_code']);
+
+    $coupon = new WC_Coupon($coupon_code);
+    if (!$coupon->get_code()) {
+        wp_send_json_error(['message' => 'Купон не найден']);
+        return;
+    }
+
+    WC()->cart->apply_coupon($coupon_code);
+    WC()->cart->calculate_totals();
+
+    $total_price = WC()->cart->get_cart_total();
+    $discount = WC()->cart->get_cart_discount_total();
+
+    wp_send_json_success([
+        'total_price' => $total_price,
+        'discount' => $discount
     ]);
 }
