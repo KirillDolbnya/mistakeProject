@@ -17,7 +17,7 @@ jQuery( document ).ready(function($) {
             success: function(response) {
                 console.log(response);
                 if (response.success) {
-                    alert(`Заказ успешно оформлен! №\' + ${response.data.order_id}`)
+                    alert(`Заказ ${response.data.applied_coupons} успешно ${response.data.discount_total} оформлен! №\' + ${response.data.order_id}`)
                     $('.cart__container').html('<p>Ваша корзина пуста</p>');
                 } else {
                     $('#order-result').html('<p style="color: red;">Ошибка: ' + response.data.message + '</p>');
@@ -45,9 +45,6 @@ jQuery( document ).ready(function($) {
             data: {
                 action: 'apply_coupon',
                 coupon_code: promoCode
-            },
-            beforeSend: function() {
-                $('#promo-message').html('<p>Проверка промокода...</p>');
             },
             success: function(response) {
                 console.log(response);

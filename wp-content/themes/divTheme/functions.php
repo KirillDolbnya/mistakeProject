@@ -135,6 +135,35 @@ function custom_ajax_update_cart_quantity() {
     ]);
 }
 
+add_action('wp_ajax_apply_coupon', 'apply_coupon');
+add_action('wp_ajax_nopriv_apply_coupon', 'apply_coupon');
+
+function apply_coupon() {
+    if (!isset($_POST['coupon_code'])) {
+        wp_send_json_error(['message' => 'Не указан промокод']);
+        return;
+    }
+
+    $coupon_code = sanitize_text_field($_POST['coupon_code']);
+
+    $coupon = new WC_Coupon($coupon_code);
+    if (!$coupon->get_code()) {
+        wp_send_json_error(['message' => 'Купон не найден']);
+        return;
+    }
+
+    WC()->cart->apply_coupon($coupon_code);
+    WC()->cart->calculate_totals();
+
+    $total_price =  WC()->cart->get_cart_contents_total();
+    $discount = WC()->cart->get_cart_discount_total();
+
+    wp_send_json_success([
+        'total_price' => $total_price,
+        'discount' => $discount
+    ]);
+}
+
 
 add_action('wp_ajax_process_checkout', 'process_checkout');
 add_action('wp_ajax_nopriv_process_checkout', 'process_checkout');
@@ -160,40 +189,33 @@ function process_checkout() {
         $order->add_product(wc_get_product($cart_item['product_id']), $cart_item['quantity']);
     }
 
+    $applied_coupons = WC()->cart->get_applied_coupons();
+    if (!empty($applied_coupons)) {
+        foreach ($applied_coupons as $coupon_code) {
+            $coupon = new WC_Coupon($coupon_code);
+            $discount_amount = WC()->cart->get_coupon_discount_amount($coupon_code);
+
+            if ($discount_amount > 0) {
+                $order->add_coupon($coupon_code, $discount_amount);
+            }
+        }
+        $order->update_meta_data('_used_coupons', implode(', ', $applied_coupons));
+    }
+
+    $discount_total = WC()->cart->get_cart_discount_total();
+    if ($discount_total > 0) {
+        $order->set_discount_total($discount_total);
+    }
+
     $order->calculate_totals();
-    $order->update_status('processing', 'Заказ создан через AJAX');
+    $order->save();
     $order_id = $order->get_id();
 
     WC()->cart->empty_cart();
 
-    wp_send_json_success(['order_id' => $order_id]);
-}
-
-add_action('wp_ajax_apply_coupon', 'apply_coupon');
-add_action('wp_ajax_nopriv_apply_coupon', 'apply_coupon');
-
-function apply_coupon() {
-    if (!isset($_POST['coupon_code'])) {
-        wp_send_json_error(['message' => 'Не указан промокод']);
-        return;
-    }
-
-    $coupon_code = sanitize_text_field($_POST['coupon_code']);
-
-    $coupon = new WC_Coupon($coupon_code);
-    if (!$coupon->get_code()) {
-        wp_send_json_error(['message' => 'Купон не найден']);
-        return;
-    }
-
-    WC()->cart->apply_coupon($coupon_code);
-    WC()->cart->calculate_totals();
-
-    $total_price = WC()->cart->get_cart_total();
-    $discount = WC()->cart->get_cart_discount_total();
-
     wp_send_json_success([
-        'total_price' => $total_price,
-        'discount' => $discount
+        'order_id' => $order_id,
+        'discount_total' => $discount_total,
+        'applied_coupons' => $applied_coupons
     ]);
 }
